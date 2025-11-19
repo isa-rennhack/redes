@@ -60,20 +60,20 @@ int main(void)
         {
             die("recvfrom()");
         }
-         
-        // Ensure the string is null-terminated
+
         buf[recv_len] = '\0';
-         
-        //print details of the client/peer and the data received
+
         printf("Received packet from %s:%d\n", 
         inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
         printf("Data: %s\n" , buf);
-         
-        //now reply the client with the same data
+
+        // Enviar ACK (confirmação)
         if (sendto(s, buf, recv_len, 0, (struct sockaddr*) &si_other, slen) == -1)
         {
             die("sendto()");
         }
+        printf("✓ ACK enviado para %s:%d\n\n", 
+               inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
     }
  
     close(s);
