@@ -20,18 +20,34 @@
 
 #define PORT 8080
 #define MAX_PLAYERS 2
-#define QTD_CARTAS 3
+#define CARDS 3
 #define BUFFER_SIZE 1024
+#define POINTS_TO_WIN 12
 
 // Estruturas do jogo
 enum Naipe { OURO = 0, COPAS = 1, ESPADAS = 2, PAUS = 3 };
 enum Value { QUATRO = 0, CINCO = 1, SEIS = 2, SETE = 3, DEZ = 4, ONZE = 5, DOZE = 6, 
              AS = 7, DOIS = 8, TRES = 9, SETE_OUROS = 10, SETE_ESPADAS = 11, AS_PAUS = 12, AS_ESPADAS = 13 };
-enum Bet { TRUCO = 0, RETRUCO = 1, VALEQUATRO = 2, FLOR = 3, CONTRAFLOR = 4, ENVIDO = 5, REALENVIDO = 6};
+enum Bet { NONE = -1, TRUCO = 0, RETRUCO = 1, VALEQUATRO = 2, FLOR = 3, CONTRAFLOR = 4, ENVIDO = 5, REALENVIDO = 6};
+enum Command { PLAY, QUERO, NAOQUERO, QUIT, NEWGAME };
 
 struct Card {
     Naipe naipe;
     Value value;
+    
+    std::string toString() const {
+        std::string valores[] = {
+            "4", "5", "6", "7", "10", "11", "12", "As", "2", "3",
+            "7♦", "7♠", "As♣", "As♠"
+        };
+        std::string naipes[] = {"♦", "♥", "♠", "♣"};
+        
+        if (value >= SETE_OUROS) {
+            return valores[value];
+        }
+        
+        return valores[value] + naipes[naipe];
+    }
 };
 
 struct Hand {
@@ -42,26 +58,58 @@ struct Hand {
 struct Player {
     int socket;
     std::string name;
-    std::vector<Hand> hand[QTD_CARTAS];
+    std::vector<Hand> hand;
     int points = 0;
-    bool active;
+    bool active = false;
 };
 
 struct Table {
-    std::vector<Card[MAX_PLAYERS]> cards;
+    std::vector<std::vector<Card>> roundCards;
+    int currentRound = 0;
 
+    void reset() {
+        roundCards.clear();
+        currentRound = 0;
+    }
+    
+    void addCard(int round, const Card& card) {
+        if (round >= (int)roundCards.size()) {
+            roundCards.resize(round + 1);
+        }
+        roundCards[round].push_back(card);
+    }
 };
 
 struct Round {
-    std::vector<int> winners[QTD_CARTAS];
-    int roundValue;
-    int roundWinner;
+    std::vector<int> winners;
+    int roundValue = 1;
+    int roundWinner = -1;
+
+    void reset() {
+        winners.clear();
+        roundValue = 1;
+        roundWinner = -1;
+    }
 };
 
 struct Match {
     Player players[MAX_PLAYERS];
-    Bet bet;
-    int betPlayer;
+    Table table;
+    Round round;
+    Bet currentBet = NONE;
+    int betPlayer = -1;
+    bool emAndamento = false;
+    int vez = 0;  // Índice de quem joga
+    int salaId;
+    pthread_mutex_t mutex;
+    
+    Match(int id) : salaId(id) {
+        pthread_mutex_init(&mutex, NULL);
+    }
+    
+    ~Match() {
+        pthread_mutex_destroy(&mutex);
+    }
 };
 
 int getBetValues(Bet bet) {
@@ -95,14 +143,39 @@ int getBetValues(Bet bet) {
 }
 
 void game() {
-    char command = 'a';
+    Command command;
     switch (command) {
-    case play:
+    case PLAY:
 
         break;
-    case truco:
-    break;
+    case QUERO:
+        break;
+    case NAOQUERO:
+        break;
+    case NEWGAME:
+        break;
+    case QUIT:
+        break;
     }
+}
+
+void* threadJogador(void* arg) {
+    int idx = *(int*)arg;
+    delete (int*)arg;
+
+    Player& jogador = partidaAtual.players[idx];
+
+    while (jogador.active && partidaAtual.emAndamento) {
+        game(jogador, partidaAtual, partidaAtual.table);
+    }
+
+    return nullptr;
+}
+
+int compararCartas(const Card& c1, const Card& c2) {
+    if (c1.value > c2.value) return 0;
+    if (c2.value > c1.value) return 1;
+    return -1;
 }
 
 int main() {
@@ -151,55 +224,7 @@ int main() {
             std::cerr << "Erro ao aceitar conexão" << std::endl;
             continue;
         }
-        
-        pthread_mutex_lock(&mutexConexao);
-        
-        // Encontrar slot livre
-        int jogadorIdx = -1;
-        for (int i = 0; i < MAX_PLAYERS; i++) {
-            if (!partidaAtual.jogadores[i].ativo) {
-                jogadorIdx = i;
-                break;
-            }
-        }
-        
-        if (jogadorIdx >= 0) {
-            partidaAtual.jogadores[jogadorIdx].socket = clientSocket;
-            partidaAtual.jogadores[jogadorIdx].ativo = true;
-            partidaAtual.jogadores[jogadorIdx].equipe = jogadorIdx % 2; // Equipes alternadas
-            numJogadoresConectados++;
-            
-            std::cout << "Jogador " << (jogadorIdx + 1) << " conectado (Equipe " 
-                     << partidaAtual.jogadores[jogadorIdx].equipe << ")" << std::endl;
-            
-            // Criar thread para o jogador
-            pthread_t thread;
-            int* idx = new int(jogadorIdx);
-            pthread_create(&thread, NULL, threadJogador, idx);
-            pthread_detach(thread);
-        } else {
-            std::string msg = "ERRO | Servidor cheio\n";
-            send(clientSocket, msg.c_str(), msg.length(), 0);
-            close(clientSocket);
-        }
-        
-        pthread_mutex_unlock(&mutexConexao);
-        
-        // Iniciar jogo quando 2 jogadores estiverem conectados
-        if (numJogadoresConectados == MAX_PLAYERS && !partidaAtual.emAndamento) {
-            std::cout << "Todos os jogadores conectados! Iniciando jogo..." << std::endl;
-            partidaAtual.emAndamento = true;
-            
-            // Sortear quem joga primeiro
-            std::srand(std::time(nullptr));
-            partidaAtual.vez = std::rand() % MAX_PLAYERS;
-            
-            iniciarRodada(partidaAtual);
-            
-            // Notificar quem joga primeiro
-            std::string msgVez = partidaAtual.jogadores[partidaAtual.vez].nome + " joga primeiro!\n";
-            enviarParaTodos(msgVez);
-        }
+       
     }
     
     close(serverSocket);
@@ -208,81 +233,3 @@ int main() {
     
     return 0;
 }
-
-// void* threadJogador(void* arg) {
-//     int idx = *(int*)arg;
-//     delete (int*)arg;
-
-//     Player& jogador = partidaAtual.players[idx];
-
-//     while (jogador.active && partidaAtual.emAndamento) {
-//         game(jogador, partidaAtual, partidaAtual.table);
-//     }
-
-//     return nullptr;
-// }
-
-
-// enum Command { CMD_PLAY = 0, CMD_TRUCO, CMD_ENVIDO, CMD_FLOR, CMD_QUIT };
-
-// void game(Player& jogador, Match& partida, Table& mesa) {
-//     char buffer[BUFFER_SIZE];
-
-//     // Receber comando do jogador
-//     int bytes = recv(jogador.socket, buffer, BUFFER_SIZE, 0);
-//     if (bytes <= 0) {
-//         std::cerr << "Erro ou desconexão do jogador " << jogador.name << std::endl;
-//         jogador.active = false;
-//         return;
-//     }
-
-//     buffer[bytes] = '\0';
-//     std::string comando(buffer);
-
-//     // Interpretar comando
-//     if (comando.rfind("PLAY", 0) == 0) { // PLAY <indice_carta>
-//         int cartaIdx = std::stoi(comando.substr(5));
-        
-//         if (cartaIdx < 0 || cartaIdx >= (int)jogador.hand.size()) {
-//             std::string msg = "CARTA INVALIDA\n";
-//             send(jogador.socket, msg.c_str(), msg.length(), 0);
-//             return;
-//         }
-
-//         if (jogador.hand[cartaIdx].played) {
-//             std::string msg = "CARTA JA JOGADA\n";
-//             send(jogador.socket, msg.c_str(), msg.length(), 0);
-//             return;
-//         }
-
-//         // Jogar a carta
-//         mesa.cards[jogador.socket % MAX_PLAYERS] = jogador.hand[cartaIdx].card;
-//         jogador.hand[cartaIdx].played = true;
-
-//         std::string msg = "CARTA JOGADA: " + std::to_string(jogador.hand[cartaIdx].card.value) + "\n";
-//         send(jogador.socket, msg.c_str(), msg.length(), 0);
-
-//     } else if (comando == "TRUCO") {
-//         partida.bet = TRUCO;
-//         partida.betPlayer = jogador.socket;
-
-//         std::string msg = jogador.name + " pediu TRUCO!\n";
-//         enviarParaTodos(msg);
-
-//     } else if (comando == "ENVIDO") {
-//         partida.bet = ENVIDO;
-//         partida.betPlayer = jogador.socket;
-
-//         std::string msg = jogador.name + " pediu ENVIDO!\n";
-//         enviarParaTodos(msg);
-
-//     } else if (comando == "QUIT") {
-//         jogador.active = false;
-//         std::string msg = jogador.name + " saiu do jogo.\n";
-//         enviarParaTodos(msg);
-
-//     } else {
-//         std::string msg = "COMANDO INVALIDO\n";
-//         send(jogador.socket, msg.c_str(), msg.length(), 0);
-//     }
-// }
