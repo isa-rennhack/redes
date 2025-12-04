@@ -42,7 +42,7 @@ typedef struct {
     int data_len;
     char filename[256];
     char data[BUFLEN];
-    unsigned int checksum;  // NOVO: CRC32 para integridade
+    unsigned int checksum;  // CRC32 para integridade
 } Packet;
 
 // Estrutura para thread com socket dedicado
@@ -51,8 +51,8 @@ typedef struct {
     socklen_t addr_len;
     int sockfd;  // Socket dedicado para esta thread
     Packet request;
-    double estimated_rtt;  // NOVO: RTT estimado para timeout adaptativo
-    double dev_rtt;        // NOVO: Desvio do RTT
+    double estimated_rtt;  // RTT estimado para timeout adaptativo
+    double dev_rtt;        // Desvio do RTT
 } ThreadArgs;
 
 void die(const char *s)
@@ -61,7 +61,7 @@ void die(const char *s)
     exit(1);
 }
 
-// NOVO: Calcular CRC32 simples (checksum)
+// Calcular CRC32 simples (checksum)
 unsigned int calculate_checksum(const char *data, int len)
 {
     unsigned int crc = 0xFFFFFFFF;
@@ -77,7 +77,7 @@ unsigned int calculate_checksum(const char *data, int len)
     return ~crc;
 }
 
-// NOVO: Obter timestamp em milissegundos
+// Obter timestamp em milissegundos
 long long get_timestamp_ms()
 {
     struct timeval tv;
@@ -97,8 +97,8 @@ int send_packet_with_ack(int sockfd, Packet *pkt, struct sockaddr_in *addr,
     
     // MELHORADO: Timeout adaptativo baseado no RTT
     int timeout_ms = (int)((*estimated_rtt + 4 * (*dev_rtt)) * 1000);
-    if (timeout_ms < 1000) timeout_ms = 1000;  // Mínimo 1 segundo
-    if (timeout_ms > 10000) timeout_ms = 10000; // Máximo 10 segundos
+    if (timeout_ms < 1000) timeout_ms = 200;  // Mínimo 200 milissegundos
+    if (timeout_ms > 10000) timeout_ms = 3000; // Máximo 3 segundos
     
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
@@ -126,20 +126,21 @@ int send_packet_with_ack(int sockfd, Packet *pkt, struct sockaddr_in *addr,
             long long recv_time = get_timestamp_ms();
             double sample_rtt = (recv_time - send_time) / 1000.0; // em segundos
             
-            // NOVO: Atualizar RTT estimado (algoritmo de Jacobson/Karels)
+            // Atualizar RTT estimado (algoritmo de Jacobson/Karels)
             *dev_rtt = (1 - BETA) * (*dev_rtt) + BETA * fabs(sample_rtt - *estimated_rtt);
             *estimated_rtt = (1 - ALPHA) * (*estimated_rtt) + ALPHA * sample_rtt;
             
-            printf("  ✓ ACK recebido seq=%d (RTT=%.3fs, Est=%.3fs, Dev=%.3fs)\n", 
-                   pkt->seq_num, sample_rtt, *estimated_rtt, *dev_rtt);
+            if (pkt->seq_num % 10 == 0) {
+                printf("  ✓ seq=%d (RTT=%.0fms)     \n", pkt->seq_num, sample_rtt * 1000);
+            }
             return 0;
         }
         
         if (recv_len == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             printf("  ⚠️  Timeout aguardando ACK seq=%d\n", pkt->seq_num);
             // Aumentar timeout após timeout (backoff exponencial)
-            timeout_ms = (int)(timeout_ms * 1.5);
-            if (timeout_ms > 10000) timeout_ms = 10000;
+            timeout_ms = (int)(timeout_ms * 1.2);
+            if (timeout_ms > 3000) timeout_ms = 3000;
         }
         
         tentativa++;
@@ -191,7 +192,7 @@ void* thread_download(void* arg)
         close(sockfd);
         free(args);
         return NULL;
-    }
+    } 
     
     // Abrir arquivo para leitura
     int fd = open(args->request.filename, O_RDONLY);
@@ -327,7 +328,7 @@ void* thread_upload(void* arg)
         }
         
         if (pkt.type == PKT_DATA) {
-            // NOVO: Verificar checksum
+            // Verificar checksum
             unsigned int received_checksum = pkt.checksum;
             unsigned int calculated_checksum = calculate_checksum(pkt.data, pkt.data_len);
             
@@ -455,8 +456,8 @@ int main(void)
         args->addr_len = slen;
         args->sockfd = s;  // Socket será substituído por um dedicado na thread
         args->request = pkt;
-        args->estimated_rtt = 1.0;  // NOVO: RTT inicial estimado de 1 segundo
-        args->dev_rtt = 0.5;         // NOVO: Desvio inicial de 0.5 segundo
+        args->estimated_rtt = 1.0;  // RTT inicial estimado de 1 segundo
+        args->dev_rtt = 0.5;         // Desvio inicial de 0.5 segundo
         
         pthread_t thread_id;
         

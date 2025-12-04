@@ -214,22 +214,45 @@ void* threadJogador(void* arg) {
         
         // Processar comandos do jogador
         if (comando.find("JOGAR_CARTA|") == 0) {
+            // Validar se é a vez deste jogador
+            if (partidaAtual.vez != jogadorIdx) {
+                enviarMensagem(jogador.socket, "ERRO|Aguarde sua vez de jogar!\n");
+                pthread_mutex_unlock(&partidaAtual.mutex);
+                continue;
+            }
+            
             // Extrair índice da carta (1, 2 ou 3)
             std::string indiceStr = comando.substr(12); // Pula "JOGAR_CARTA|"
             int indice = std::atoi(indiceStr.c_str()) - 1; // Converter para índice 0-based
             
-            if (indice >= 0 && indice < (int)jogador.mao.size()) {
-                Carta carta = jogador.mao[indice];
-                partidaAtual.mesa.cartasJogadas.push_back(carta);
-                partidaAtual.mesa.jogadorQuemJogou.push_back(jogadorIdx);
-                jogador.mao.erase(jogador.mao.begin() + indice);
-                
-                std::string msg = "CARTA_JOGADA|" + jogador.nome + " jogou: " + carta.toString() + "\n";
-                enviarParaTodos(msg);
-                std::cout << jogador.nome << " jogou: " << carta.toString() << std::endl;
-            } else {
-                enviarMensagem(jogador.socket, "ERRO|Índice de carta inválido!\n");
+            // Validar índice e existência da carta
+            if (indice < 0 || indice >= (int)jogador.mao.size()) {
+                enviarMensagem(jogador.socket, "ERRO|Índice de carta inválido! Você tem " + 
+                             std::to_string(jogador.mao.size()) + " carta(s).\n");
+                pthread_mutex_unlock(&partidaAtual.mutex);
+                continue;
             }
+            
+            // Copiar carta ANTES de remover
+            Carta cartaJogada = jogador.mao[indice];
+            
+            // Remover carta da mão IMEDIATAMENTE
+            jogador.mao.erase(jogador.mao.begin() + indice);
+            
+            // Adicionar à mesa
+            partidaAtual.mesa.cartasJogadas.push_back(cartaJogada);
+            partidaAtual.mesa.jogadorQuemJogou.push_back(jogadorIdx);
+            
+            std::string msg = "CARTA_JOGADA|" + jogador.nome + " jogou: " + cartaJogada.toString() + "\n";
+            enviarParaTodos(msg);
+            std::cout << jogador.nome << " jogou: " << cartaJogada.toString() << " (Restam " << jogador.mao.size() << " cartas)" << std::endl;
+            
+            // Alternar vez para o próximo jogador
+            partidaAtual.vez = (partidaAtual.vez + 1) % MAX_PLAYERS;
+            
+            // Notificar próximo jogador
+            std::string msgVez = "SUA_VEZ|" + partidaAtual.jogadores[partidaAtual.vez].nome + " é sua vez!\n";
+            enviarParaTodos(msgVez);
             
         } else if (comando.find("TRUCO") == 0) {
             partidaAtual.truco = true;
@@ -309,10 +332,10 @@ int main() {
     }
     
     std::cout << "Servidor de Truco Espanhol iniciado na porta " << PORT << std::endl;
-    std::cout << "Aguardando " << MAX_PLAYERS << " jogadores..." << std::endl;
+    std::cout << "Aguardando jogadores..." << std::endl;
     
-    // Aceitar conexões
-    while (numJogadoresConectados < MAX_PLAYERS) {
+    // Aceitar conexões (loop infinito para permitir reconexões)
+    while (true) {
         clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddr, &clientAddrLen);
         
         if (clientSocket < 0) {
@@ -352,17 +375,22 @@ int main() {
         }
         
         pthread_mutex_unlock(&mutexConexao);
-    }
-    
-    // Todos os jogadores conectados - iniciar jogo
-    std::cout << "Todos os jogadores conectados! Iniciando jogo..." << std::endl;
-    partidaAtual.emAndamento = true;
-    
-    iniciarRodada(partidaAtual);
-    
-    // Manter servidor rodando
-    while (partidaAtual.emAndamento) {
-        sleep(1);
+        
+        // Iniciar jogo quando 2 jogadores estiverem conectados
+        if (numJogadoresConectados == MAX_PLAYERS && !partidaAtual.emAndamento) {
+            std::cout << "Todos os jogadores conectados! Iniciando jogo..." << std::endl;
+            partidaAtual.emAndamento = true;
+            
+            // Sortear quem joga primeiro
+            std::srand(std::time(nullptr));
+            partidaAtual.vez = std::rand() % MAX_PLAYERS;
+            
+            iniciarRodada(partidaAtual);
+            
+            // Notificar quem joga primeiro
+            std::string msgVez = "SUA_VEZ|" + partidaAtual.jogadores[partidaAtual.vez].nome + " joga primeiro!\n";
+            enviarParaTodos(msgVez);
+        }
     }
     
     close(serverSocket);

@@ -144,14 +144,14 @@ void* thread_check_timeouts(void* arg)
         if (timeout_ms < 500) timeout_ms = 500;
         if (timeout_ms > 5000) timeout_ms = 5000;
         
-        // ✅ Verifica cada pacote na janela
+        // Verifica cada pacote na janela
         for (int seq = window->base; seq < window->next_seq_num; seq++) {
             int idx = seq % WINDOW_SIZE;
             
             if (!window->acked[idx] && 
                 (now - window->send_times[idx]) > timeout_ms) {
                 
-                // ✅ RETRANSMITIR apenas este pacote (Selective Repeat)
+                // RETRANSMITIR apenas este pacote (Selective Repeat)
                 Packet *pkt = &window->packets[idx];
                 sendto(window->sockfd, pkt, sizeof(Packet), 0, 
                        (struct sockaddr*)window->server_addr, window->addr_len);
@@ -212,7 +212,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     struct sockaddr_in server_thread_addr;
     socklen_t server_thread_len = sizeof(server_thread_addr);
     
-    // ✅ CRÍTICO: Receber ACK e descobrir porta da thread do servidor
+    // CRÍTICO: Receber ACK e descobrir porta da thread do servidor
     if (recvfrom(sockfd, &ack, sizeof(Packet), 0, 
                 (struct sockaddr*)&server_thread_addr, &server_thread_len) <= 0 || 
         ack.type != PKT_ACK) {
@@ -226,10 +226,10 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
            inet_ntoa(server_thread_addr.sin_addr), 
            ntohs(server_thread_addr.sin_port));
     
-    // ✅ Atualizar endereço do servidor para a porta da thread
+    // Atualizar endereço do servidor para a porta da thread
     *server_addr = server_thread_addr;
     
-    // ✅ Inicializar janela deslizante
+    // Inicializar janela deslizante
     SlidingWindow window;
     memset(&window, 0, sizeof(SlidingWindow));
     window.base = 0;
@@ -242,7 +242,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     window.dev_rtt = 0.5;
     pthread_mutex_init(&window.lock, NULL);
     
-    // ✅ Ler arquivo e preparar pacotes (buffer dinâmico)
+    // Ler arquivo e preparar pacotes (buffer dinâmico)
     Packet *all_packets = (Packet*)malloc(1000 * sizeof(Packet));
     if (!all_packets) {
         printf("❌ Erro ao alocar memória\n");
@@ -268,12 +268,12 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     printf("📦 Total de pacotes: %d\n", total_packets);
     printf("📊 Tamanho da janela: %d\n\n", WINDOW_SIZE);
     
-    // ✅ Criar threads
+    // Criar threads
     pthread_t tid_ack, tid_timeout;
     pthread_create(&tid_ack, NULL, thread_receive_acks, &window);
     pthread_create(&tid_timeout, NULL, thread_check_timeouts, &window);
     
-    // ✅ LOOP PRINCIPAL: Enviar pacotes conforme janela permite
+    // LOOP PRINCIPAL: Enviar pacotes conforme janela permite
     while (window.base < total_packets) {
         pthread_mutex_lock(&window.lock);
         
@@ -286,7 +286,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
             window.acked[idx] = 0;
             window.send_times[idx] = get_timestamp_ms();
             
-            // ✅ Enviar para a porta da thread (não para porta 9999)
+            // Enviar para a porta da thread (não para porta 9999)
             sendto(sockfd, &window.packets[idx], sizeof(Packet), 0, 
                    (struct sockaddr*)server_addr, addr_len);
             
@@ -304,7 +304,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     printf("\n⏳ Aguardando ACKs finais...\n");
     sleep(2); // Aguarda ACKs finais
     
-    // ✅ Enviar pacote END
+    // Enviar pacote END
     Packet end_pkt;
     memset(&end_pkt, 0, sizeof(Packet));
     end_pkt.type = PKT_END;
@@ -312,13 +312,13 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     
     printf("Enviando pacote END...\n");
     for (int i = 0; i < 3; i++) {
-        // ✅ END também vai para porta da thread
+        // END também vai para porta da thread
         sendto(sockfd, &end_pkt, sizeof(Packet), 0, 
                (struct sockaddr*)server_addr, addr_len);
         usleep(100000);
     }
     
-    // ✅ Encerrar threads
+    // Encerrar threads
     window.finished = 1;
     pthread_join(tid_ack, NULL);
     pthread_join(tid_timeout, NULL);
@@ -355,7 +355,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
         return;
     }
     
-    // ✅ Buffer dinâmico para recebimento fora de ordem
+    // Buffer dinâmico para recebimento fora de ordem
     Packet *buffer = (Packet*)malloc(1000 * sizeof(Packet));
     int *received = (int*)calloc(1000, sizeof(int));
     if (!buffer || !received) {
@@ -390,7 +390,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
             break;
         }
         
-        // ✅ CRÍTICO: Capturar porta da thread no primeiro pacote DATA
+        // CRÍTICO: Capturar porta da thread no primeiro pacote DATA
         if (first_packet && pkt.type == PKT_DATA) {
             printf("✓ Thread do servidor: %s:%d\n", 
                    inet_ntoa(from_addr.sin_addr), 
@@ -412,7 +412,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
             memset(&ack, 0, sizeof(Packet));
             ack.type = PKT_ACK;
             ack.seq_num = pkt.seq_num;
-            // ✅ ACK vai para porta da thread
+            // ACK vai para porta da thread
             sendto(sockfd, &ack, sizeof(Packet), 0, 
                    (struct sockaddr*)&from_addr, from_len);
             printf("\n✓ Download concluído\n");
@@ -427,14 +427,14 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
                 continue;
             }
             
-            // ✅ Armazenar pacote (mesmo fora de ordem)
+            // Armazenar pacote (mesmo fora de ordem)
             if (!received[pkt.seq_num]) {
                 buffer[pkt.seq_num] = pkt;
                 received[pkt.seq_num] = 1;
                 printf("📥 Recebido seq=%d ✓ Checksum OK\n", pkt.seq_num);
             }
             
-            // ✅ Enviar ACK seletivo para porta da thread (from_addr já está correto)
+            // Enviar ACK seletivo para porta da thread (from_addr já está correto)
             Packet ack;
             memset(&ack, 0, sizeof(Packet));
             ack.type = PKT_ACK;
@@ -442,7 +442,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
             sendto(sockfd, &ack, sizeof(Packet), 0, 
                    (struct sockaddr*)&from_addr, from_len);
             
-            // ✅ Escrever pacotes em ordem no arquivo
+            // Escrever pacotes em ordem no arquivo
             while (received[base]) {
                 write(fd, buffer[base].data, buffer[base].data_len);
                 printf("💾 Escrito seq=%d no arquivo\n", base);

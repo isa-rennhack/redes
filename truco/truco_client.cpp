@@ -18,6 +18,13 @@
 int clientSocket = -1;
 bool conectado = false;
 pthread_t threadReceber;
+bool minhaVez = false;
+std::string nomeJogador = "";
+
+// Declaração de funções
+void mostrarOpcoesDisponiveis();
+void mostrarOpcoesResposta();
+void mostrarMenuCompleto();
 
 // Função para receber mensagens do servidor
 void* receberMensagens(void* arg) {
@@ -42,7 +49,6 @@ void* receberMensagens(void* arg) {
             
         } else if (mensagem.find("SUAS_CARTAS|") == 0) {
             std::string cartas = mensagem.substr(12);
-            std::cout << "\n═══════════════════════════════════════" << std::endl;
             std::cout << "       SUAS CARTAS NA MÃO" << std::endl;
             std::cout << "═══════════════════════════════════════" << std::endl;
             
@@ -56,13 +62,12 @@ void* receberMensagens(void* arg) {
             if (!cartas.empty() && cartas != "\n") {
                 std::cout << "[" << indice << "] " << cartas << std::endl;
             }
-            std::cout << "═══════════════════════════════════════\n" << std::endl;
+            std::cout << "\n" << std::endl;
             
         } else if (mensagem.find("NOVA_RODADA|") == 0) {
             std::string msg = mensagem.substr(12);
-            std::cout << "\n╔═══════════════════════════════════════╗" << std::endl;
-            std::cout << "  " << msg;
-            std::cout << "╚═══════════════════════════════════════╝\n" << std::endl;
+            std::cout << "\n  " << msg;
+            std::cout << "═══════════════════════════════════════\n" << std::endl;
             
         } else if (mensagem.find("CARTA_JOGADA|") == 0) {
             std::string msg = mensagem.substr(13);
@@ -71,6 +76,11 @@ void* receberMensagens(void* arg) {
         } else if (mensagem.find("TRUCO|") == 0) {
             std::string msg = mensagem.substr(6);
             std::cout << "\n🎲 TRUCO! " << msg << std::endl;
+            
+            // Se não foi você que pediu, mostrar opções de resposta
+            if (msg.find(nomeJogador) == std::string::npos) {
+                mostrarOpcoesResposta();
+            }
             
         } else if (mensagem.find("RETRUCO|") == 0) {
             std::string msg = mensagem.substr(8);
@@ -84,6 +94,10 @@ void* receberMensagens(void* arg) {
             std::string msg = mensagem.substr(7);
             std::cout << "\n💎 ENVIDO! " << msg << std::endl;
             
+            if (msg.find(nomeJogador) == std::string::npos) {
+                std::cout << "\n💡 Opções: quero | naoquero | realenvido\n" << std::endl;
+            }
+            
         } else if (mensagem.find("REAL_ENVIDO|") == 0) {
             std::string msg = mensagem.substr(12);
             std::cout << "\n💎💎 REAL ENVIDO! " << msg << std::endl;
@@ -91,6 +105,10 @@ void* receberMensagens(void* arg) {
         } else if (mensagem.find("FLOR|") == 0) {
             std::string msg = mensagem.substr(5);
             std::cout << "\n🌸 FLOR! " << msg << std::endl;
+            
+            if (msg.find(nomeJogador) == std::string::npos) {
+                std::cout << "\n💡 Opções: quero | naoquero | contraflor\n" << std::endl;
+            }
             
         } else if (mensagem.find("CONTRA_FLOR|") == 0) {
             std::string msg = mensagem.substr(12);
@@ -103,23 +121,43 @@ void* receberMensagens(void* arg) {
         } else if (mensagem.find("NAO_QUERO|") == 0) {
             std::string msg = mensagem.substr(10);
             std::cout << "\n✗ NÃO QUERO! " << msg << std::endl;
-            
-        } else if (mensagem.find("ACEITO|") == 0) {
-            std::string msg = mensagem.substr(7);
-            std::cout << "\n✓ " << msg << std::endl;
-            
-        } else if (mensagem.find("REJEITADO|") == 0) {
-            std::string msg = mensagem.substr(10);
-            std::cout << "\n✗ " << msg << std::endl;
-            
+
         } else if (mensagem.find("DESCONEXAO|") == 0) {
             std::string msg = mensagem.substr(11);
             std::cout << "\n⚠️  " << msg << std::endl;
             
+        } else if (mensagem.find("RODADA_RESULTADO|") == 0) {
+            std::string msg = mensagem.substr(17);
+            std::cout << msg;
+            
+        } else if (mensagem.find("PARTIDA_VENCIDA|") == 0) {
+            std::string msg = mensagem.substr(16);
+            std::cout << msg;
+            
+        } else if (mensagem.find("JOGO_FINALIZADO|") == 0) {
+            std::string msg = mensagem.substr(16);
+            std::cout << msg;
+            conectado = false;
+            
+        } else if (mensagem.find("PROXIMA_RODADA|") == 0) {
+            std::string msg = mensagem.substr(15);
+            std::cout << "\n📢 " << msg << std::endl;
+            
+        } else if (mensagem.find("SUA_VEZ|") == 0) {
+            std::string msg = mensagem.substr(8);
+
+            if (msg.find(nomeJogador) != std::string::npos) {
+                minhaVez = true;
+                std::cout << "\n➡️  " << msg << std::endl;
+                mostrarOpcoesDisponiveis();
+            } else {
+                minhaVez = false;
+                std::cout << "\n⏳ Aguarde... É a vez de jogar do(a) adversário(a).\n" << std::endl;
+            }
+            
         } else if (mensagem.find("ERRO|") == 0) {
             std::string msg = mensagem.substr(5);
             std::cerr << "\n❌ ERRO: " << msg << std::endl;
-            conectado = false;
             
         } else {
             // Mensagem genérica
@@ -130,7 +168,7 @@ void* receberMensagens(void* arg) {
     return nullptr;
 }
 
-void mostrarMenu() {
+void mostrarMenuCompleto() {
     std::cout << "\n┌────────────────────────────────────────┐" << std::endl;
     std::cout << "│         COMANDOS DISPONÍVEIS           │" << std::endl;
     std::cout << "├────────────────────────────────────────┤" << std::endl;
@@ -155,8 +193,32 @@ void mostrarMenu() {
     std::cout << "│   naoquero    - Rejeitar aposta        │" << std::endl;
     std::cout << "├────────────────────────────────────────┤" << std::endl;
     std::cout << "│   menu/ajuda  - Mostrar este menu      │" << std::endl;
-    std::cout << "│   sair        - Sair do jogo           │" << std::endl;
     std::cout << "└────────────────────────────────────────┘" << std::endl;
+}
+
+void mostrarOpcoesDisponiveis() {
+    std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
+    std::cout << "║        🎮 SUA VEZ DE JOGAR! 🎮        ║" << std::endl;
+    std::cout << "╠════════════════════════════════════════╣" << std::endl;
+    std::cout << "║ Opções:                                ║" << std::endl;
+    std::cout << "║ • 1/2/3    - Jogar carta               ║" << std::endl;
+    std::cout << "║ • truco    - Pedir truco (vale 2)      ║" << std::endl;
+    std::cout << "║ • envido   - Pedir envido              ║" << std::endl;
+    std::cout << "║ • flor     - Pedir flor                ║" << std::endl;
+    std::cout << "║ • menu     - Ver todos comandos        ║" << std::endl;
+    std::cout << "╚════════════════════════════════════════╝" << std::endl;
+}
+
+void mostrarOpcoesResposta() {
+    std::cout << "\n╔════════════════════════════════════════╗" << std::endl;
+    std::cout << "║       ⚠️  RESPONDA À APOSTA! ⚠️        ║" << std::endl;
+    std::cout << "╠════════════════════════════════════════╣" << std::endl;
+    std::cout << "║ Opções:                                ║" << std::endl;
+    std::cout << "║ • quero      - Aceitar aposta          ║" << std::endl;
+    std::cout << "║ • naoquero   - Rejeitar aposta         ║" << std::endl;
+    std::cout << "║ • retruco    - Aumentar aposta         ║" << std::endl;
+    std::cout << "║ • menu       - Ver todos comandos      ║" << std::endl;
+    std::cout << "╚════════════════════════════════════════╝" << std::endl;
 }
 
 void conectarServidor(const std::string& ip, int porta) {
@@ -193,11 +255,10 @@ void conectarServidor(const std::string& ip, int porta) {
     
     // Solicitar nome do jogador
     std::cout << "\nDigite seu nome: ";
-    std::string nome;
-    std::getline(std::cin, nome);
+    std::getline(std::cin, nomeJogador);
     
     // Enviar nome ao servidor
-    send(clientSocket, nome.c_str(), nome.length(), 0);
+    send(clientSocket, nomeJogador.c_str(), nomeJogador.length(), 0);
     
     // Criar thread para receber mensagens
     pthread_create(&threadReceber, NULL, receberMensagens, NULL);
@@ -225,7 +286,7 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "╔═══════════════════════════════════════════╗" << std::endl;
-    std::cout << "║      CLIENTE TRUCO ESPANHOL TCP/IP       ║" << std::endl;
+    std::cout << "║      CLIENTE TRUCO ESPANHOL TCP/IP        ║" << std::endl;
     std::cout << "╚═══════════════════════════════════════════╝" << std::endl;
     
     // Conectar ao servidor
@@ -235,8 +296,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Mostrar menu
-    mostrarMenu();
+    // Mostrar menu completo inicial
+    std::cout << "\n💡 Digite 'menu' a qualquer momento para ver todos os comandos\n" << std::endl;
     
     // Loop principal - ler comandos do usuário
     std::string comando;
@@ -248,7 +309,10 @@ int main(int argc, char* argv[]) {
             continue;
         }
         // Processar comandos de jogo
-        if (comando == "1" || comando == "2" || comando == "3") {
+        if (comando == "menu" || comando == "ajuda") {
+            mostrarMenuCompleto();
+            
+        } else if (comando == "1" || comando == "2" || comando == "3") {
             enviarComando("JOGAR_CARTA|" + comando);
             
         } else if (comando == "truco") {
@@ -281,8 +345,13 @@ int main(int argc, char* argv[]) {
         } else if (comando == "naoquero" || comando == "nao quero" || comando == "não quero" || comando == "rejeitar" || comando == "recusar") {
             enviarComando("NAO_QUERO");
             
+        } else if (comando == "sair" || comando == "exit") {
+            std::cout << "Saindo do jogo..." << std::endl;
+            conectado = false;
+            close(clientSocket);
+            
         } else {
-            std::cout << "Comando desconhecido. Digite 'menu' para ver os comandos." << std::endl;
+            std::cout << "\n❌ Comando desconhecido. Digite 'menu' para ver todos os comandos." << std::endl;
         }
     }
     
