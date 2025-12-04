@@ -30,6 +30,7 @@ enum Valor { QUATRO = 0, CINCO = 1, SEIS = 2, SETE = 3, DEZ = 4, ONZE = 5, DOZE 
 struct Carta {
     Naipe naipe;
     Valor valor;
+    bool used;
     
     std::string toString() const {
         std::string valores[] = {"4", "5", "6", "7", "10", "11", "12", "As", "2", "3", "7 de Ouros", "7 de Espadas", "As de Paus", "As de Espadas"};
@@ -233,19 +234,16 @@ void* threadJogador(void* arg) {
                 continue;
             }
             
-            // Copiar carta ANTES de remover
-            Carta cartaJogada = jogador.mao[indice];
-            
-            // Remover carta da mão IMEDIATAMENTE
-            jogador.mao.erase(jogador.mao.begin() + indice);
+            //carta já jogada
+            jogador.mao[indice].used = true;
             
             // Adicionar à mesa
-            partidaAtual.mesa.cartasJogadas.push_back(cartaJogada);
+            partidaAtual.mesa.cartasJogadas.push_back(jogador.mao[indice]);
             partidaAtual.mesa.jogadorQuemJogou.push_back(jogadorIdx);
             
-            std::string msg = "CARTA_JOGADA|" + jogador.nome + " jogou: " + cartaJogada.toString() + "\n";
+            std::string msg = "CARTA_JOGADA|" + jogador.nome + " jogou: " + jogador.mao[indice].toString() + "\n";
             enviarParaTodos(msg);
-            std::cout << jogador.nome << " jogou: " << cartaJogada.toString() << " (Restam " << jogador.mao.size() << " cartas)" << std::endl;
+            std::cout << jogador.nome << " jogou: " << jogador.mao[indice].toString() << std::endl;
             
             // Alternar vez para o próximo jogador
             partidaAtual.vez = (partidaAtual.vez + 1) % MAX_PLAYERS;
