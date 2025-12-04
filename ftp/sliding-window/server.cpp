@@ -42,14 +42,14 @@ typedef struct {
     int data_len;
     char filename[256];
     char data[BUFLEN];
-    unsigned int checksum;  // NOVO: CRC32 para integridade
+    unsigned int checksum;
 } Packet;
 
-// Estrutura de janela deslizante para Selective Repeat
+// Estrutura de janela deslizante
 typedef struct {
     Packet packets[WINDOW_SIZE];       // Buffer de pacotes
     long long send_times[WINDOW_SIZE]; // Timestamps de envio
-    int acked[WINDOW_SIZE];             // Bitmap de ACKs recebidos
+    int acked[WINDOW_SIZE];             // ACKs recebidos
     int base;                           // Início da janela
     int next_seq_num;                   // Próximo a enviar
     int total_packets;                  // Total de pacotes
@@ -76,7 +76,7 @@ void die(const char *s)
     exit(1);
 }
 
-// NOVO: Calcular CRC32 simples (checksum)
+// Calcular CRC32 simples (checksum)
 unsigned int calculate_checksum(const char *data, int len)
 {
     unsigned int crc = 0xFFFFFFFF;
@@ -92,7 +92,7 @@ unsigned int calculate_checksum(const char *data, int len)
     return ~crc;
 }
 
-// NOVO: Obter timestamp em milissegundos
+// timestamp em milissegundos
 long long get_timestamp_ms()
 {
     struct timeval tv;
@@ -100,7 +100,7 @@ long long get_timestamp_ms()
     return (long long)(tv.tv_sec) * 1000 + (tv.tv_usec) / 1000;
 }
 
-// ✅ Thread para RECEBER ACKs (download com Selective Repeat)
+// Thread para RECEBER ACKs (download com Selective Repeat)
 void* thread_receive_acks(void* arg)
 {
     SlidingWindow *window = (SlidingWindow*)arg;
@@ -112,6 +112,7 @@ void* thread_receive_acks(void* arg)
     setsockopt(window->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     
     while (!window->finished) {
+        //janela não fechada > envia dados
         memset(&ack, 0, sizeof(Packet));
         
         int recv_len = recvfrom(window->sockfd, &ack, sizeof(Packet), 0, 
@@ -152,11 +153,11 @@ void* thread_receive_acks(void* arg)
             pthread_mutex_unlock(&window->lock);
         }
     }
-    
+    //janela fechada > null
     return NULL;
 }
 
-// ✅ Thread para VERIFICAR TIMEOUTS e RETRANSMITIR
+// Thread para VERIFICAR TIMEOUTS e RETRANSMITIR
 void* thread_check_timeouts(void* arg)
 {
     SlidingWindow *window = (SlidingWindow*)arg;
@@ -176,7 +177,7 @@ void* thread_check_timeouts(void* arg)
             int idx = seq % WINDOW_SIZE;
             
             if (!window->acked[idx] && 
-                (now - window->send_times[idx]) > timeout_ms) {
+                (now - window->send_times[idx]) > timeout_ms) { //se não teve ack e não deu timeout ainda
                 
                 // RETRANSMITIR apenas este pacote (Selective Repeat)
                 Packet *pkt = &window->packets[idx];
@@ -207,7 +208,7 @@ void send_ack(int sockfd, int seq_num, struct sockaddr_in *addr, socklen_t addr_
     printf("  ACK enviado para seq=%d\n", seq_num);
 }
 
-// ✅ DOWNLOAD com Sliding Window (Selective Repeat)
+// DOWNLOAD com Sliding Window (Selective Repeat)
 void* thread_download(void* arg)
 {
     ThreadArgs *args = (ThreadArgs*)arg;
@@ -253,7 +254,7 @@ void* thread_download(void* arg)
         return NULL;
     }
     
-    // ✅ Ler todos os pacotes do arquivo (buffer dinâmico)
+    // Ler todos os pacotes do arquivo (buffer dinâmico)
     Packet *all_packets = (Packet*)malloc(1000 * sizeof(Packet));
     if (!all_packets) {
         printf("[DOWNLOAD] Erro ao alocar memória\n");
@@ -266,6 +267,7 @@ void* thread_download(void* arg)
     int total_packets = 0;
     int bytes_read;
     
+    //enquanto estiver lendo dados
     while ((bytes_read = read(fd, all_packets[total_packets].data, BUFLEN)) > 0) {
         all_packets[total_packets].type = PKT_DATA;
         all_packets[total_packets].seq_num = total_packets;
@@ -280,7 +282,7 @@ void* thread_download(void* arg)
     printf("[DOWNLOAD] 📦 Total: %d pacotes | 📊 Janela: %d\n\n", 
            total_packets, WINDOW_SIZE);
     
-    // ✅ Inicializar janela deslizante
+    // Inicializar janela deslizante
     SlidingWindow window;
     memset(&window, 0, sizeof(SlidingWindow));
     window.base = 0;
@@ -294,16 +296,16 @@ void* thread_download(void* arg)
     window.dev_rtt = 0.5;
     pthread_mutex_init(&window.lock, NULL);
     
-    // ✅ Criar threads para ACKs e timeouts
+    // Criar threads para ACKs e timeouts
     pthread_t tid_ack, tid_timeout;
     pthread_create(&tid_ack, NULL, thread_receive_acks, &window);
     pthread_create(&tid_timeout, NULL, thread_check_timeouts, &window);
     
-    // ✅ LOOP PRINCIPAL: Enviar pacotes conforme janela permite
+    // LOOP PRINCIPAL: Enviar pacotes conforme janela permite
     while (window.base < total_packets) {
         pthread_mutex_lock(&window.lock);
         
-        // Enviar novos pacotes se houver espaço na janela
+        // Enviar pacotes se houver espaço na janela
         while (window.next_seq_num < window.base + WINDOW_SIZE && 
                window.next_seq_num < total_packets) {
             
@@ -329,7 +331,7 @@ void* thread_download(void* arg)
     printf("\n⏳ Aguardando ACKs finais...\n");
     sleep(2);
     
-    // ✅ Enviar pacote END
+    // Enviar pacote END
     Packet end_pkt;
     memset(&end_pkt, 0, sizeof(Packet));
     end_pkt.type = PKT_END;
@@ -342,7 +344,7 @@ void* thread_download(void* arg)
         usleep(100000);
     }
     
-    // ✅ Encerrar threads
+    // Encerrar threads
     window.finished = 1;
     pthread_join(tid_ack, NULL);
     pthread_join(tid_timeout, NULL);
@@ -357,7 +359,7 @@ void* thread_download(void* arg)
     return NULL;
 }
 
-// ✅ UPLOAD com Buffer para Recepção Fora de Ordem (Selective Repeat)
+// UPLOAD com Buffer para Recepção Fora de Ordem (Selective Repeat)
 void* thread_upload(void* arg)
 {
     ThreadArgs *args = (ThreadArgs*)arg;
@@ -367,7 +369,7 @@ void* thread_upload(void* arg)
     printf("[UPLOAD] Cliente: %s:%d (Selective Repeat)\n", 
            inet_ntoa(args->client_addr.sin_addr), ntohs(args->client_addr.sin_port));
     
-    // ✅ CORREÇÃO CRÍTICA: Socket dedicado para upload (evita conflito com main loop)
+    // Socket dedicado para upload (evita conflito com main loop)
     int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sockfd == -1) {
         perror("socket thread_upload");
@@ -407,7 +409,7 @@ void* thread_upload(void* arg)
     // Enviar ACK para requisição inicial
     send_ack(sockfd, 0, &args->client_addr, args->addr_len);
     
-    // ✅ Buffer dinâmico para recebimento fora de ordem (evita stack overflow)
+    // Buffer dinâmico para recebimento fora de ordem (evita stack overflow)
     Packet *buffer = (Packet*)malloc(1000 * sizeof(Packet));
     int *received = (int*)calloc(1000, sizeof(int));
     if (!buffer || !received) {
@@ -456,17 +458,17 @@ void* thread_upload(void* arg)
                 continue;
             }
             
-            // ✅ Armazenar pacote (mesmo fora de ordem)
+            // Armazenar pacote (mesmo fora de ordem)
             if (!received[pkt.seq_num]) {
                 buffer[pkt.seq_num] = pkt;
                 received[pkt.seq_num] = 1;
                 printf("[UPLOAD] 📥 Recebido seq=%d ✓ Checksum OK\n", pkt.seq_num);
             }
             
-            // ✅ Enviar ACK seletivo (sempre ACK do que recebeu)
+            // Enviar ACK seletivo (sempre ACK do que recebeu)
             send_ack(sockfd, pkt.seq_num, &args->client_addr, args->addr_len);
             
-            // ✅ Escrever pacotes em ordem no arquivo
+            // Escrever pacotes em ordem no arquivo
             while (received[base]) {
                 write(fd, buffer[base].data, buffer[base].data_len);
                 printf("[UPLOAD] 💾 Escrito seq=%d no arquivo\n", base);
@@ -561,7 +563,7 @@ int main(void)
     while (1) {
         memset(&pkt, 0, sizeof(Packet));
         
-        // Receber requisição
+        // Recebe requisição
         int recv_len = recvfrom(s, &pkt, sizeof(Packet), 0, 
                                 (struct sockaddr*)&si_other, &slen);
         
@@ -571,7 +573,7 @@ int main(void)
         printf("Requisição de %s:%d\n", 
                inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
         
-        // Criar thread conforme o tipo de requisição
+        // Cria thread conforme o tipo de requisição
         ThreadArgs *args = (ThreadArgs*)malloc(sizeof(ThreadArgs));
         args->client_addr = si_other;
         args->addr_len = slen;
@@ -583,12 +585,22 @@ int main(void)
         if (pkt.type == PKT_DOWNLOAD_REQUEST) {
             printf("Tipo: DOWNLOAD arquivo '%s'\n", pkt.filename);
             pthread_create(&thread_id, NULL, thread_download, args);
-        } 
-        else if (pkt.type == PKT_UPLOAD_REQUEST) {
+        } else if (pkt.type == PKT_UPLOAD_REQUEST) {
             printf("Tipo: UPLOAD arquivo '%s'\n", pkt.filename);
             pthread_create(&thread_id, NULL, thread_upload, args);
-        }
-        else {
+        } else if (pkt.type == PKT_DATA) {
+            printf("Transmissao de Dados: %d\n", pkt.type);
+            free(args);
+        } else if (pkt.type == PKT_ACK) {
+            printf("ACK: %d\n", pkt.type);
+            free(args);
+        } else if (pkt.type == PKT_END) {
+            printf("Fim: %d\n", pkt.type);
+            free(args);
+        } else if (pkt.type == PKT_ERROR) {
+            printf("Erro: %d\n", pkt.type);
+            free(args);
+        } else {
             printf("Tipo desconhecido: %d\n", pkt.type);
             free(args);
         }

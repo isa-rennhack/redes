@@ -192,7 +192,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
         return;
     }
     
-    // Enviar requisição inicial (Stop-and-Wait)
+    // Enviar requisição inicial
     Packet req;
     memset(&req, 0, sizeof(Packet));
     req.type = PKT_UPLOAD_REQUEST;
@@ -212,7 +212,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     struct sockaddr_in server_thread_addr;
     socklen_t server_thread_len = sizeof(server_thread_addr);
     
-    // CRÍTICO: Receber ACK e descobrir porta da thread do servidor
+    // Receber ACK e descobrir porta da thread do servidor
     if (recvfrom(sockfd, &ack, sizeof(Packet), 0, 
                 (struct sockaddr*)&server_thread_addr, &server_thread_len) <= 0 || 
         ack.type != PKT_ACK) {
@@ -273,11 +273,11 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     pthread_create(&tid_ack, NULL, thread_receive_acks, &window);
     pthread_create(&tid_timeout, NULL, thread_check_timeouts, &window);
     
-    // LOOP PRINCIPAL: Enviar pacotes conforme janela permite
+    // LOOP PRINCIPAL: Envia pacotes conforme janela permite
     while (window.base < total_packets) {
         pthread_mutex_lock(&window.lock);
         
-        // Enviar novos pacotes se houver espaço na janela
+        // Envia novos pacotes se houver espaço na janela
         while (window.next_seq_num < window.base + WINDOW_SIZE && 
                window.next_seq_num < total_packets) {
             
@@ -286,7 +286,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
             window.acked[idx] = 0;
             window.send_times[idx] = get_timestamp_ms();
             
-            // Enviar para a porta da thread (não para porta 9999)
+            // Envia para a porta da thread (não para porta 9999)
             sendto(sockfd, &window.packets[idx], sizeof(Packet), 0, 
                    (struct sockaddr*)server_addr, addr_len);
             
@@ -304,7 +304,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     printf("\n⏳ Aguardando ACKs finais...\n");
     sleep(2); // Aguarda ACKs finais
     
-    // Enviar pacote END
+    // Envia pacote END
     Packet end_pkt;
     memset(&end_pkt, 0, sizeof(Packet));
     end_pkt.type = PKT_END;
@@ -318,7 +318,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
         usleep(100000);
     }
     
-    // Encerrar threads
+    // Encerra threads
     window.finished = 1;
     pthread_join(tid_ack, NULL);
     pthread_join(tid_timeout, NULL);
@@ -390,7 +390,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
             break;
         }
         
-        // CRÍTICO: Capturar porta da thread no primeiro pacote DATA
+        // Captura porta da thread no primeiro pacote DATA
         if (first_packet && pkt.type == PKT_DATA) {
             printf("✓ Thread do servidor: %s:%d\n", 
                    inet_ntoa(from_addr.sin_addr), 
@@ -427,14 +427,14 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
                 continue;
             }
             
-            // Armazenar pacote (mesmo fora de ordem)
+            // Armazenar pacote
             if (!received[pkt.seq_num]) {
                 buffer[pkt.seq_num] = pkt;
                 received[pkt.seq_num] = 1;
                 printf("📥 Recebido seq=%d ✓ Checksum OK\n", pkt.seq_num);
             }
             
-            // Enviar ACK seletivo para porta da thread (from_addr já está correto)
+            // Envia ACK seletivo para porta da thread
             Packet ack;
             memset(&ack, 0, sizeof(Packet));
             ack.type = PKT_ACK;
@@ -496,20 +496,21 @@ int main(void)
     
     while (1) {
         printf("> ");
+        //espera o comando
         fgets(command, sizeof(command), stdin);
         command[strcspn(command, "\n")] = 0;
         
-        if (strcmp(command, "sair") == 0) {
+        if (strcmp(command, "sair") == 0 || strcmp(command, "SAIR") == 0) {
             break;
         }
-        else if (strcmp(command, "upload") == 0) {
+        else if (strcmp(command, "upload") == 0 || strcmp(command, "UPLOAD") == 0) {
             printf("Nome do arquivo: ");
             fgets(filename, sizeof(filename), stdin);
             filename[strcspn(filename, "\n")] = 0;
             
             upload_file(s, filename, &si_other, slen);
         }
-        else if (strcmp(command, "download") == 0) {
+        else if (strcmp(command, "download") == 0 || strcmp(command, "DOWNLOAD") == 0) {
             printf("Nome do arquivo: ");
             fgets(filename, sizeof(filename), stdin);
             filename[strcspn(filename, "\n")] = 0;

@@ -1,7 +1,6 @@
 /*
-    FTP Client com UDP - Stop and Wait MELHORADO
+    FTP Client com UDP - Stop and Wait
     Suporta upload e download de arquivos
-    - Corrigido bug de leitura de arquivos
     - Checksum CRC32 para integridade
     - Timeout adaptativo
 */
@@ -38,7 +37,7 @@ typedef struct {
     int data_len;
     char filename[256];
     char data[BUFLEN];
-    unsigned int checksum;  // NOVO
+    unsigned int checksum;
 } Packet;
 
 void die(const char *s)
@@ -47,7 +46,7 @@ void die(const char *s)
     exit(1);
 }
 
-// NOVO: Calcular CRC32
+// Calcular CRC32
 unsigned int calculate_checksum(const char *data, int len)
 {
     unsigned int crc = 0xFFFFFFFF;
@@ -63,7 +62,7 @@ unsigned int calculate_checksum(const char *data, int len)
     return ~crc;
 }
 
-// NOVO: Obter timestamp
+// Obter timestamp
 long long get_timestamp_ms()
 {
     struct timeval tv;
@@ -71,7 +70,7 @@ long long get_timestamp_ms()
     return (long long)(tv.tv_sec) * 1000 + (tv.tv_usec) / 1000;
 }
 
-// MELHORADO: Função para enviar pacote com retransmissão e timeout adaptativo
+// Função para enviar pacote com retransmissão e timeout adaptativo
 int send_packet_with_ack(int sockfd, Packet *pkt, struct sockaddr_in *addr, 
                          socklen_t addr_len, double *estimated_rtt, double *dev_rtt)
 {
@@ -143,7 +142,7 @@ void send_ack(int sockfd, int seq_num, struct sockaddr_in *addr, socklen_t addr_
     printf("  ACK enviado para seq=%d\n", seq_num);
 }
 
-// MELHORADO: Upload sem bug de leitura
+// Upload sem bug de leitura
 void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_addr, socklen_t addr_len)
 {
     printf("\n═══════════════════════════════════════════\n");
@@ -174,14 +173,13 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
         return;
     }
     
-    // CORRIGIDO: Enviar arquivo sem bug
+    // Enviar arquivo sem bug
     int seq_num = 0;
     int bytes_read;
     
     while (1) {
         memset(&pkt, 0, sizeof(Packet));
         
-        // Ler arquivo UMA VEZ apenas
         bytes_read = read(fd, pkt.data, BUFLEN);
         
         if (bytes_read <= 0) break;
@@ -204,7 +202,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     
     close(fd);
     
-    // Enviar END
+    // Envia END
     memset(&pkt, 0, sizeof(Packet));
     pkt.type = PKT_END;
     pkt.seq_num = seq_num;
@@ -216,7 +214,7 @@ void upload_file(int sockfd, const char *filename, struct sockaddr_in *server_ad
     printf("═══════════════════════════════════════════\n\n");
 }
 
-// MELHORADO: Download com verificação de checksum
+// Download com verificação de checksum
 void download_file(int sockfd, const char *filename, struct sockaddr_in *server_addr, socklen_t addr_len)
 {
     printf("\n═══════════════════════════════════════════\n");
@@ -251,14 +249,14 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
     tv.tv_usec = 0;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     
-    // ✅ CRÍTICO: Variável para aceitar resposta de qualquer porta do servidor
+    // Variável para aceitar resposta de qualquer porta do servidor
     struct sockaddr_in from_addr;
     socklen_t from_len = sizeof(from_addr);
     
     while (1) {
         memset(&pkt, 0, sizeof(Packet));
         
-        // ✅ CORRIGIDO: Recebe de qualquer porta (não apenas 9999)
+        // Recebe de qualquer porta (não apenas 9999)
         int recv_len = recvfrom(sockfd, &pkt, sizeof(Packet), 0, 
                                 (struct sockaddr*)&from_addr, &from_len);
         
@@ -279,14 +277,14 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
         }
         
         if (pkt.type == PKT_END) {
-            // ✅ Envia ACK para o endereço que enviou (pode ser porta diferente)
+            // Envia ACK para o endereço que enviou (pode ser porta diferente)
             send_ack(sockfd, pkt.seq_num, &from_addr, from_len);
             printf("\n✓ Download concluído: %s\n", download_filename);
             break;
         }
         
         if (pkt.type == PKT_DATA) {
-            // NOVO: Verificar checksum
+            // Verificar checksum
             unsigned int received_checksum = pkt.checksum;
             unsigned int calculated_checksum = calculate_checksum(pkt.data, pkt.data_len);
             
@@ -300,7 +298,7 @@ void download_file(int sockfd, const char *filename, struct sockaddr_in *server_
                 printf("Pacote %d escrito (%d bytes) ✓ Checksum OK\n", 
                        pkt.seq_num, pkt.data_len);
                 
-                // ✅ Envia ACK para o endereço que enviou (pode ser porta diferente)
+                // Envia ACK para o endereço que enviou (pode ser porta diferente)
                 send_ack(sockfd, pkt.seq_num, &from_addr, from_len);
                 expected_seq++;
             } else {
@@ -362,14 +360,14 @@ int main(void)
         if (strcmp(command, "sair") == 0) {
             break;
         }
-        else if (strcmp(command, "upload") == 0) {
+        else if (strcmp(command, "upload") == 0 || strcmp(command, "UPLOAD") == 0) {
             printf("Nome do arquivo: ");
             fgets(filename, sizeof(filename), stdin);
             filename[strcspn(filename, "\n")] = 0;
             
             upload_file(s, filename, &si_other, slen);
         }
-        else if (strcmp(command, "download") == 0) {
+        else if (strcmp(command, "download") == 0 || strcmp(command, "DOWNLOAD") == 0) {
             printf("Nome do arquivo: ");
             fgets(filename, sizeof(filename), stdin);
             filename[strcspn(filename, "\n")] = 0;
