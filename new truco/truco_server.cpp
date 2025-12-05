@@ -17,6 +17,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <ifaddrs.h>
+#include <netdb.h>
 
 #define PORT 8080
 #define MAX_PLAYERS 2
@@ -102,6 +104,9 @@ struct Match {
     int turn = 0;
     int roomId;
     pthread_mutex_t mutex;
+    bool waitingBetResponse = false;
+    int betRespondent = -1;
+    int pendingPoints = 1;
     
     Match(int id) : roomId(id) {
         pthread_mutex_init(&mutex, NULL);
@@ -119,7 +124,7 @@ pthread_mutex_t mutexRooms = PTHREAD_MUTEX_INITIALIZER;
 
 Command parseCommand(const std::string& cmd) {
     if (cmd == "quit" || cmd == "QUIT" || cmd == "sair") return QUIT;
-    if (cmd == "nova" || cmd == "NOVA") return NEWGAME;
+    if (cmd == "start" || cmd == "START") return NEWGAME;
     if (cmd == "quero" || cmd == "QUERO") return QUERO;
     if (cmd == "naoquero" || cmd == "NAOQUERO") return NAOQUERO;
     if (cmd == "1" || cmd == "2" || cmd == "3") return PLAY;
@@ -137,6 +142,70 @@ int getBetValues(Bet bet) {
         case REALENVIDO: return 5;
         default: return 1;
     }
+}
+
+bool hasFlor(Player& player) {
+    if (player.hand.size() < 3) return false;
+    
+    Naipe firstNaipe = player.hand[0].card.naipe;
+    for (size_t i = 1; i < player.hand.size(); i++) {
+        if (player.hand[i].card.naipe != firstNaipe) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string getAvailableCommands(Match* match, int playerIdx) {
+    Player& player = match->players[playerIdx];
+    std::string commands = "\n>>> Comandos disponíveis: ";
+    
+    // Se está aguardando resposta de aposta
+    if (match->waitingBetResponse && match->betRespondent == playerIdx) {
+        commands += "[quero] [naoquero]";
+        return commands;
+    }
+    
+    // Se não é a vez do jogador, não mostrar comandos
+    if (match->turn != playerIdx) {
+        return "";
+    }
+    
+    // Comandos de jogo
+    commands += "[1/2/3 - jogar carta]";
+    
+    // Primeira rodada - pode pedir envido, flor e truco
+    if (match->table.currentRound == 0) {
+        if (match->currentBet == NONE) {
+            commands += " [envido] [truco]";
+            if (hasFlor(player)) {
+                commands += " [flor]";
+            }
+        } else if (match->currentBet == ENVIDO) {
+            commands += " [realenvido] [truco]";
+        } else if (match->currentBet == FLOR) {
+            int opponent = (playerIdx + 1) % MAX_PLAYERS;
+            if (hasFlor(match->players[opponent])) {
+                commands += " [contraflor]";
+            }
+            commands += " [truco]";
+        } else if (match->currentBet == TRUCO) {
+            commands += " [retruco]";
+        } else if (match->currentBet == RETRUCO) {
+            commands += " [vale4]";
+        }
+    } else {
+        // Rodadas 2 e 3 - apenas truco e derivados
+        if (match->currentBet == NONE) {
+            commands += " [truco]";
+        } else if (match->currentBet == TRUCO) {
+            commands += " [retruco]";
+        } else if (match->currentBet == RETRUCO) {
+            commands += " [vale4]";
+        }
+    }
+    
+    return commands;
 }
 
 void sendMessage(int socket, const std::string& msg) {
@@ -209,6 +278,12 @@ void startMatch(Match* match) {
     match->table.reset();
     match->round.reset();
     match->turn = rand() % MAX_PLAYERS;
+    match->currentBet = NONE;
+    match->betPlayer = -1;
+    match->waitingBetResponse = false;
+    match->betRespondent = -1;
+    match->pendingPoints = 1;
+    match->round.roundValue = 1;
     
     distributeCards(match);
     
@@ -218,34 +293,43 @@ void startMatch(Match* match) {
     
     for (int i = 0; i < MAX_PLAYERS; i++) {
         if (match->players[i].active) {
-            std::string cards = "cards | ";
+            std::string cards = "cartas | ";
             for (size_t j = 0; j < match->players[i].hand.size(); j++) {
-                cards += std::to_string(j + 1) + ":" + match->players[i].hand[j].card.toString();
-                if (j < match->players[i].hand.size() - 1) cards += ",";
+                cards += match->players[i].hand[j].card.toString();
+                if (j < match->players[i].hand.size() - 1) cards += "; ";
             }
             cards += "\n";
             sendMessage(match->players[i].socket, cards);
         }
     }
     
-    std::string turnMsg = "turn | " + std::to_string(match->turn) + "|" + match->players[match->turn].name + "\n";
+    std::string turnMsg = "rodada | " + std::to_string(match->turn) + "|" + match->players[match->turn].name + "\n";
     sendToAll(match, turnMsg);
+    
+    // Enviar comandos disponíveis para o jogador da vez
+    std::string cmds = getAvailableCommands(match, match->turn);
+    if (!cmds.empty()) {
+        sendMessage(match->players[match->turn].socket, cmds + "\n");
+    }
 }
 
 void proccessCommand(Match* match, int playerIdx, const std::string& cmdStr) {
     pthread_mutex_lock(&match->mutex);
     
     Player& player = match->players[playerIdx];
-    Command cmd = parseCommand(cmdStr);
+    std::string cmd = cmdStr;
     
-    if (cmd == QUIT) {
+    // Converter para minúsculas
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::tolower);
+    
+    if (cmd == "quit" || cmd == "sair") {
         player.active = false;
         pthread_mutex_unlock(&match->mutex);
         sendToAll(match, "INFO | " + player.name + " saiu.\n");
         return;
     }
     
-    if (cmd == NEWGAME) {
+    if (cmd == "start") {
         bool bothReady = true;
         for (int i = 0; i < MAX_PLAYERS; i++) {
             if (!match->players[i].active) bothReady = false;
@@ -258,17 +342,169 @@ void proccessCommand(Match* match, int playerIdx, const std::string& cmdStr) {
         return;
     }
     
-    if (cmd == PLAY) {
+    // Resposta a apostas
+    if (cmd == "quero") {
+        if (!match->waitingBetResponse || match->betRespondent != playerIdx) {
+            sendMessage(player.socket, "ERRO | Não há aposta para responder!\n");
+            pthread_mutex_unlock(&match->mutex);
+            return;
+        }
+        
+        sendToAll(match, "INFO | " + player.name + " aceitou a aposta!\n");
+        match->round.roundValue = match->pendingPoints;
+        match->waitingBetResponse = false;
+        
+        // Enviar comandos atualizados
+        std::string cmds = getAvailableCommands(match, match->turn);
+        if (!cmds.empty()) {
+            sendMessage(match->players[match->turn].socket, cmds + "\n");
+        }
+        
+        pthread_mutex_unlock(&match->mutex);
+        return;
+    }
+    
+    if (cmd == "naoquero") {
+        if (!match->waitingBetResponse || match->betRespondent != playerIdx) {
+            sendMessage(player.socket, "ERRO | Não há aposta para responder!\n");
+            pthread_mutex_unlock(&match->mutex);
+            return;
+        }
+        
+        // Pontos vão para quem apostou (valor anterior à aposta)
+        int betterIdx = match->betPlayer;
+        int previousValue = match->round.roundValue;
+        match->players[betterIdx].points += previousValue;
+        
+        std::string msg = "INFO | " + player.name + " não quis! ";
+        msg += match->players[betterIdx].name + " ganha " + std::to_string(previousValue) + " pontos!\n";
+        msg += "Placar: " + std::to_string(match->players[0].points) + "x" + std::to_string(match->players[1].points) + "\n";
+        sendToAll(match, msg);
+        
+        if (match->players[betterIdx].points >= POINTS_TO_WIN) {
+            sendToAll(match, "VITORIA | " + match->players[betterIdx].name + " venceu o jogo!\n");
+            match->onGoing = false;
+        } else {
+            pthread_mutex_unlock(&match->mutex);
+            sleep(2);
+            startMatch(match);
+            return;
+        }
+        
+        pthread_mutex_unlock(&match->mutex);
+        return;
+    }
+    
+    // Apostas
+    if (cmd == "envido" || cmd == "realenvido" || cmd == "flor" || cmd == "contraflor" ||
+        cmd == "truco" || cmd == "retruco" || cmd == "vale4") {
+        
         if (match->turn != playerIdx) {
             sendMessage(player.socket, "ERRO | Não é sua vez!\n");
             pthread_mutex_unlock(&match->mutex);
             return;
         }
         
-        int idx = std::atoi(cmdStr.c_str()) - 1;
+        Bet newBet = NONE;
+        int newPoints = 0;
+        
+        if (cmd == "envido") {
+            if (match->table.currentRound != 0 || match->currentBet != NONE) {
+                sendMessage(player.socket, "ERRO | Envido só na primeira rodada!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = ENVIDO;
+            newPoints = 2;
+        } else if (cmd == "realenvido") {
+            if (match->currentBet != ENVIDO) {
+                sendMessage(player.socket, "ERRO | Real envido só após envido!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = REALENVIDO;
+            newPoints = 5;
+        } else if (cmd == "flor") {
+            if (match->table.currentRound != 0 || !hasFlor(player)) {
+                sendMessage(player.socket, "ERRO | Você não tem flor!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = FLOR;
+            newPoints = 3;
+        } else if (cmd == "contraflor") {
+            if (match->currentBet != FLOR) {
+                sendMessage(player.socket, "ERRO | Contraflor só após flor!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            int opponent = (playerIdx + 1) % MAX_PLAYERS;
+            if (!hasFlor(match->players[opponent])) {
+                sendMessage(player.socket, "ERRO | Você não tem flor para contraflor!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = CONTRAFLOR;
+            newPoints = 6;
+        } else if (cmd == "truco") {
+            if (match->currentBet >= TRUCO) {
+                sendMessage(player.socket, "ERRO | Truco já foi pedido!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = TRUCO;
+            newPoints = 2;
+        } else if (cmd == "retruco") {
+            if (match->currentBet != TRUCO) {
+                sendMessage(player.socket, "ERRO | Retruco só após truco!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = RETRUCO;
+            newPoints = 3;
+        } else if (cmd == "vale4") {
+            if (match->currentBet != RETRUCO) {
+                sendMessage(player.socket, "ERRO | Vale 4 só após retruco!\n");
+                pthread_mutex_unlock(&match->mutex);
+                return;
+            }
+            newBet = VALEQUATRO;
+            newPoints = 4;
+        }
+        
+        match->currentBet = newBet;
+        match->betPlayer = playerIdx;
+        match->betRespondent = (playerIdx + 1) % MAX_PLAYERS;
+        match->waitingBetResponse = true;
+        match->pendingPoints = newPoints;
+        
+        sendToAll(match, "APOSTA | " + player.name + " pediu " + cmd + "!\n");
+        
+        std::string askMsg = ">>> " + match->players[match->betRespondent].name + ", responda: [quero] ou [naoquero]\n";
+        sendMessage(match->players[match->betRespondent].socket, askMsg);
+        
+        pthread_mutex_unlock(&match->mutex);
+        return;
+    }
+    
+    // Jogar carta
+    if (cmd == "1" || cmd == "2" || cmd == "3") {
+        if (match->turn != playerIdx) {
+            sendMessage(player.socket, "ERRO | Não é sua vez!\n");
+            pthread_mutex_unlock(&match->mutex);
+            return;
+        }
+        
+        if (match->waitingBetResponse) {
+            sendMessage(player.socket, "ERRO | Aguarde resposta da aposta!\n");
+            pthread_mutex_unlock(&match->mutex);
+            return;
+        }
+        
+        int idx = std::atoi(cmd.c_str()) - 1;
         
         if (idx < 0 || idx >= (int)player.hand.size() || player.hand[idx].played) {
-            sendMessage(player.socket, "ERRO | carta inválida!\n");
+            sendMessage(player.socket, "ERRO | Carta inválida!\n");
             pthread_mutex_unlock(&match->mutex);
             return;
         }
@@ -289,7 +525,7 @@ void proccessCommand(Match* match, int playerIdx, const std::string& cmdStr) {
             match->round.winners.push_back(vencedor);
             
             if (vencedor != -1) {
-                sendToAll(match, "RODADA | " + match->players[vencedor].name + " venceu!\n");
+                sendToAll(match, "RODADA | " + match->players[vencedor].name + " venceu a rodada!\n");
                 match->turn = vencedor;
             }
             
@@ -297,7 +533,7 @@ void proccessCommand(Match* match, int playerIdx, const std::string& cmdStr) {
             if (winnerHand != -1) {
                 match->players[winnerHand].points += match->round.roundValue;
                 
-                std::string msg = "MÃO | " + match->players[winnerHand].name + " venceu! ";
+                std::string msg = "MAO | " + match->players[winnerHand].name + " venceu a mão! (" + std::to_string(match->round.roundValue) + " pontos)\n";
                 msg += "Placar: " + std::to_string(match->players[0].points) + "x" + std::to_string(match->players[1].points) + "\n";
                 sendToAll(match, msg);
                 
@@ -316,12 +552,46 @@ void proccessCommand(Match* match, int playerIdx, const std::string& cmdStr) {
         }
         
         if (match->onGoing) {
-            std::string turnMsg = "RODADA | " + std::to_string(match->turn) + "|" + match->players[match->turn].name + "\n";
+            std::string turnMsg = "turn | " + std::to_string(match->turn) + "|" + match->players[match->turn].name + "\n";
             sendToAll(match, turnMsg);
+            
+            // Enviar comandos disponíveis
+            std::string cmds = getAvailableCommands(match, match->turn);
+            if (!cmds.empty()) {
+                sendMessage(match->players[match->turn].socket, cmds + "\n");
+            }
         }
     }
     
     pthread_mutex_unlock(&match->mutex);
+}
+
+void printLocalIPs() {
+    struct ifaddrs *ifaddr, *ifa;
+    char host[NI_MAXHOST];
+    
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+    
+    std::cout << "\n📡 IPs disponíveis para conexão:\n";
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        
+        int family = ifa->ifa_addr->sa_family;
+        if (family == AF_INET) {
+            if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+                           host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+                std::string ip(host);
+                if (ip != "127.0.0.1") {
+                    std::cout << "   • " << ifa->ifa_name << ": " << ip << "\n";
+                }
+            }
+        }
+    }
+    std::cout << "\n";
+    freeifaddrs(ifaddr);
 }
 
 void* threadPlayer(void* arg) {
@@ -350,7 +620,9 @@ void* threadPlayer(void* arg) {
     pthread_mutex_unlock(&match->mutex);
     
     if (both) {
-        sendToAll(match, "INFO | Todos conectados! Digite 'nova' para começar.\n");
+        sendToAll(match, "INFO | Todos conectados! Digite 'start' para começar.\n");
+    } else {
+        sendMessage(player.socket, "INFO | Aguardando outro jogador...\n");
     }
     
     while (player.active) {
@@ -381,8 +653,12 @@ int main() {
     struct sockaddr_in serverAddr, clientAddr;
     socklen_t clientAddrLen = sizeof(clientAddr);
     
-    std::cout << "=== SERVIDOR TRUCO ESPANHOL ===\n";
-    std::cout << "Porta: " << PORT << "\n\n";
+    std::cout << "╔═══════════════════════════════════════╗\n";
+    std::cout << "║   SERVIDOR DE TRUCO ESPANHOL         ║\n";
+    std::cout << "║   Porta: " << PORT << "                        ║\n";
+    std::cout << "╚═══════════════════════════════════════╝\n";
+    
+    printLocalIPs();
     
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (serverSocket < 0) {
@@ -395,7 +671,7 @@ int main() {
     
     memset(&serverAddr, 0, sizeof(serverAddr));
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_addr.s_addr = INADDR_ANY;  // Aceita conexões de qualquer IP
     serverAddr.sin_port = htons(PORT);
     
     if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
